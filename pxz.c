@@ -166,7 +166,7 @@ void parse_args( int argc, char **argv ) {
 				break;
 			case 'h':
 			case 'H':
-				printf("Parallel PXZ-"PXZ_VERSION"-"PXZ_BUILD_DATE", by Jindrich Novy <jnovy@users.sourceforge.net>\n\n"
+				printf("Parallel PXZ-"PXZ_VERSION"-"PXZ_BUILD_DATE", by Jindrich Novy <jnovy@users.sourceforge.net> / Adrien Dessemond <adessemond@funtoo.org>\n\n"
 					"Options:\n"
 					"  -T, --threads       maximum number of threads to run simultaneously\n"
 					"  -D, --context-size  per-thread compression context size as a multiple\n"
