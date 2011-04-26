@@ -1,5 +1,5 @@
 NAME=pxz
-VERSION=4.999.9beta
+VERSION=20110425
 CFLAGS?=-O2 -Wall -Wshadow -Wcast-align -Winline -Wextra -Wmissing-noreturn -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE
 CFLAGS+=-fopenmp
 LDFLAGS+=-llzma
