@@ -3,6 +3,7 @@
  * runs LZMA compression simultaneously on multiple cores.
  *
  * Copyright (C) 2009 Jindrich Novy (jnovy@users.sourceforge.net)
+ * Copyright (C) 2011 Adrien Dessemond (adessemond@funtoo.org)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,6 +28,8 @@
 #include <unistd.h>
 #include <error.h>
 #include <errno.h>
+#include <inttypes.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -247,7 +250,7 @@ int main( int argc, char **argv ) {
 	for (i=0; i<files; i++) {
 		int std_in = file[i][0] == '-' && file[i][1] == '\0';
 #ifdef _OPENMP
-		threads = omp_get_max_threads();
+		threads = omp_get_max_threads() > 24 ? 24 : omp_get_max_threads();  /* Above this limit, some problems have been seen (encoder init. failures) */
 #else
 		threads = 1;
 #endif
@@ -267,8 +270,10 @@ int main( int argc, char **argv ) {
 		chunk_size = opt_context_size*(1<<(opt_complevel <= 1 ? 16 : opt_complevel + 17));
 		chunk_size = (chunk_size + page_size)&~(page_size-1);
 		
+		/* PRIu64: handles the format string depending on the platform (expands to 'llu' or 'lu') */
 		if ( opt_verbose ) {
-			fprintf(stderr, "context size per thread: %ld B\n", chunk_size);
+			fprintf(stderr, "using a maximum of %"PRIu64" thread(s)\n", threads);		
+			fprintf(stderr, "context size per thread: %"PRIu64" B\n", chunk_size);
 		}
 		
 		if ( opt_threads && (threads > opt_threads || opt_force) ) {
@@ -292,14 +297,23 @@ int main( int argc, char **argv ) {
 		
 		if ( opt_verbose ) {
 			if ( fo != stdout ) {
-				fprintf(stderr, "%s -> %ld/%ld thread%c: [", file[i], threads, (s.st_size+chunk_size-1)/chunk_size, threads != 1 ? 's' : ' ');
+				fprintf(stderr, "%s -> %"PRIu64"/%"PRIu64" thread%c: [", file[i], threads, (s.st_size+chunk_size-1)/chunk_size, threads != 1 ? 's' : ' ');
 			} else {
-				fprintf(stderr, "%ld thread%c: [", threads, threads != 1 ? 's' : ' ');
+				fprintf(stderr, "%"PRIu64" thread%c: [", threads, threads != 1 ? 's' : ' ');
 			}
 			fflush(stderr);
 		}
 		
-		m  = malloc(threads*chunk_size);
+		
+		/* streams have an internal limitation that will make I/O operations fails beyond the 4 GiB boundaries, ensure the requested size for I/O (threads*chunk_size does not exceed the limit) */
+		/* TODO: use read()/write() instead of fread()/fwrite() */
+		if (threads*chunk_size > UINT_MAX) {
+			error(EXIT_FAILURE, errno, "compression working buffer exceeds 4GiB (%"PRIu64" GiB), please reduce the number of threads and/or the compression level.", (threads*chunk_size) >> 20);
+		}
+		
+		if ((m  = malloc(threads*chunk_size)) == NULL) {
+			error(EXIT_FAILURE, errno, "unable to allocate memory to allocate the compression working buffer, please reduce the number of threads and/or the compression level.");
+		}
 		
 		new_action.sa_handler = term_handler;
 		sigemptyset (&new_action.sa_mask);
@@ -312,7 +326,10 @@ int main( int argc, char **argv ) {
 		sigaction(SIGTERM, NULL, &old_action);
 		if (old_action.sa_handler != SIG_IGN) sigaction(SIGTERM, &new_action, NULL);
 		
-		ftemp = malloc(threads*sizeof(ftemp[0]));
+		if((ftemp = malloc(threads*sizeof(ftemp[0]))) == NULL) {
+			 error(EXIT_FAILURE, errno, "unable to allocate an internal buffer");
+		}
+		
 		
 		while ( !feof(fi) ) {
 			size_t actrd;
@@ -335,7 +352,10 @@ int main( int argc, char **argv ) {
 				lzma_stream strm = LZMA_STREAM_INIT;
 				lzma_ret ret;
 				
-				mo = malloc(BUFFSIZE);
+				if((mo = malloc(BUFFSIZE)) == NULL) {
+					error(EXIT_FAILURE, errno, "unable to allocate an internal buffer");	
+				}
+				
 				
 				if ( lzma_easy_encoder(&strm, opt_complevel, LZMA_CHECK_CRC64) != LZMA_OK ) {
 					error(EXIT_FAILURE, errno, "unable to initialize LZMA encoder");
@@ -381,7 +401,7 @@ int main( int argc, char **argv ) {
 				free(mo);
 				
 				if ( opt_verbose ) {
-					fprintf(stderr, "%ld ", p);
+					fprintf(stderr, "%"PRIu64" ", p);
 					fflush(stderr);
 				}
 			}
@@ -442,7 +462,7 @@ int main( int argc, char **argv ) {
 		sigaction(SIGTERM, &old_action, NULL);
 		
 		if ( opt_verbose ) {
-			fprintf(stderr, "%ld -> %ld %3.3f%%\n", s.st_size, ts, ts*100./s.st_size);
+			fprintf(stderr, "%"PRIu64"-> %"PRIu64" (compression ratio: %3.3f%%)\n", (uint64_t) s.st_size, ts, (ts*100.0)/s.st_size);
 		}
 		
 		if ( !opt_keep && unlink(file[i]) ) {
